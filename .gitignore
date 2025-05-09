@@ -1,0 +1,14 @@
+# 忽略常见 Python 虚拟环境目录
+venv/
+env/
+.apen/
+apen/
+
+# 忽略 Python 编译文件
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# 忽略日志文件
+*.log
