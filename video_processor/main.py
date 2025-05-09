@@ -57,12 +57,7 @@ def main():
             # 2. 显示选择区域
             region_selector.draw(display_frame)
             
-            # 3. 显示帧差分析（当有前一帧时）
-            if prev_frame is not None:
-                gray_prev = cv2.cvtColor(prev_frame, cv2.COLOR_BGR2GRAY)
-                gray_curr = cv2.cvtColor(curr_frame, cv2.COLOR_BGR2GRAY)
-                frame_diff = cv2.absdiff(gray_prev, gray_curr)
-                cv2.imshow('Frame Difference', frame_diff)
+
             
             # 显示主画面
             cv2.putText(display_frame, f"FPS: {fps_counter.fps:.1f}", 
