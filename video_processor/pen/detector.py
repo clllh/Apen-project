@@ -3,7 +3,7 @@ import cv2
 import numpy as np
 
 class PenDetector:
-    def __init__(self, model_path = r'E:\aPenproject\Apen-project\video_processor\pen\best.pt', conf_thres=0.25):
+    def __init__(self, model_path = r'D:\zhs\Apen-project\video_processor\pen\best.pt', conf_thres=0.25):
         print(f"Loading model from: {model_path}")
         self.model = YOLO(model_path)
         self.conf_thres = conf_thres
