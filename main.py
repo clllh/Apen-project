@@ -1,115 +1,139 @@
-from camera.frame_capturer import VideoCapturer
-from utils.fps_controller import FPSCounter, FPSLimiter
-from pen.detector import PenDetector
-from utils.region_selector import RegionSelector
-from utils.ocr_processor import OCRProcessor
 import cv2
-import keyboard
+from utils.fps_controller import FPSCounter
+import time
+from ultralytics import YOLO
 import numpy as np
+import keyboard  # pip install keyboard
+from utils.ocr_processor import OCRProcessor  # 导入 OCR 处理模块
 
-def preprocess_image(image):
-    # 图像预处理：灰度化、二值化、降噪等
-    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-    # 使用高斯滤波去除噪声
-    blurred = cv2.GaussianBlur(gray, (5, 5), 0)
-    # 使用自适应阈值分割
-    _, binary = cv2.threshold(blurred, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
-    return binary
+class PenDetector:
+    def __init__(self, model_path=r'D:\zhs\Apen-project\video_processor\pen\bestva.pt', conf_thres=0.25):
+        print(f"Loading PyTorch model from: {model_path}")
+        self.model = YOLO(model_path)
+        self.conf_thres = conf_thres
 
-def main():
-    # 初始化模块
-    capturer = VideoCapturer(src=0, target_fps=25)
+    def detect(self, frame):
+        results = self.model.predict(source=frame, conf=self.conf_thres, verbose=False)
+        if not results or not hasattr(results[0], "keypoints"):
+            return None
+        keypoints = results[0].keypoints
+        if keypoints is None or keypoints.xy is None or len(keypoints.xy) == 0:
+            return None
+        pen_kps = keypoints.xy
+        if len(pen_kps[0]) == 0:
+            return None
+        pen_tip = pen_kps[0][0].cpu().numpy()  # 第一个目标的第一个关键点
+        x, y = int(pen_tip[0]), int(pen_tip[1])
+        return (x, y)
+
+def test_camera_with_pen_detection_and_ocr(camera_index=0, duration=60):
+    cap = cv2.VideoCapture(camera_index)
+    if not cap.isOpened():
+        print("无法打开摄像头")
+        return
+
+    cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1920)
+    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 1080)
+
+    print("开始测试摄像头并进行按空格框选笔尖...")
+
     fps_counter = FPSCounter()
-    fps_limiter = FPSLimiter(target_fps=25)
-    pen_detector = PenDetector()
-    region_selector = RegionSelector()
-    ocr_processor = OCRProcessor(lang='ch_sim')  # 初始化 EasyOCR 处理器
-    ocr_active = False
-    last_ocr_text = ""
+    detector = PenDetector()
+    ocr_processor = OCRProcessor()  # 初始化 OCR 处理器
 
-    try:
-        while True:
-            # 控制帧率
-            fps_limiter.wait()
+    frame_count = 0
+    start_time = time.time()
 
-            # 捕获双帧
-            ret, prev_frame, curr_frame = capturer.read()
-            if not ret:
-                break
+    space_was_pressed = False
+    press_pos = None
+    release_pos = None
+    region = None
+    ocr_result = None  # 用于存储 OCR 结果
 
-            # 更新FPS计数
-            fps_counter.update()
+    while True:
+        ret, frame = cap.read()
+        if not ret:
+            print("读取帧失败")
+            break
 
-            # 笔尖检测
-            pen_result = pen_detector.detect(curr_frame)
-            pen_position, pen_radius = pen_result if pen_result else (None, None)
+        fps_counter.update()
 
-            # 区域选择控制
-            if keyboard.is_pressed('space'):
-                if pen_position and not region_selector.is_selecting:
-                    region_selector.begin_selection(pen_position)
-            else:
-                if region_selector.is_selecting and pen_position:
-                    region_selector.end_selection()
+        space_is_pressed = keyboard.is_pressed('space')
 
-            # 更新选择区域
-            if region_selector.is_selecting and pen_position:
-                region_selector.update_selection(pen_position)
+        # 按下空格，检测并记录起点（第一次检测有效笔尖位置）
+        if space_is_pressed and not space_was_pressed:
+            pos = detector.detect(frame)
+            if pos is not None:
+                press_pos = pos
+                print(f"空格按下，起点: {press_pos}")
 
-            # 显示处理
-            display_frame = curr_frame.copy()
+        # 抬起空格，检测并记录终点，计算框选区域
+        if not space_is_pressed and space_was_pressed:
+            pos = detector.detect(frame)
+            if pos is not None:
+                release_pos = pos
+                print(f"空格抬起，终点: {release_pos}")
 
-            # 显示笔尖位置
-            if pen_position:
-                cv2.circle(display_frame, pen_position, int(pen_radius), (0, 0, 255), 2)
-                cv2.putText(display_frame, f"Pen: {pen_position}", (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+                if press_pos is not None and release_pos is not None:
+                    x1, y1 = press_pos
+                    x2, y2 = release_pos
+                    # 计算左上角和宽高
+                    x, y = min(x1, x2), min(y1, y2)
+                    w, h = abs(x2 - x1), abs(y2 - y1)
+                    region = (x, y, w, h)
+                    print(f"选中区域: {region}")
 
-            # 显示选择区域
-            region_selector.draw(display_frame)
+                    # 对框选区域进行 OCR 识别
+                    if w > 0 and h > 0:
+                        # 裁剪框选区域
+                        roi = frame[y:y+h, x:x+w]
+                        # 进行 OCR 识别
+                        boxes, texts, scores = ocr_processor.process_image(roi)
+                        ocr_result = (boxes, texts, scores)
+                        print("OCR 结果:")
+                        for text, score in zip(texts, scores):
+                            print(f"文字: {text}, 置信度: {score:.2f}")
+                else:
+                    print("起点或终点无效，无法设置区域")
 
-            # 显示FPS
-            cv2.putText(display_frame, f"FPS: {fps_counter.fps:.1f}", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
-            cv2.imshow('Pen Reader System', display_frame)
+        space_was_pressed = space_is_pressed
 
-            # 显示选定区域
-            if not region_selector.is_selecting and region_selector.get_region():
-                x, y, w, h = region_selector.get_region()
-                selected_roi = curr_frame[y:y+h, x:x+w]
-                cv2.imshow("Selected Region", selected_roi)
+        # 画选中区域框
+        if region is not None:
+            x, y, w, h = region
+            if w > 0 and h > 0:
+                cv2.rectangle(frame, (x, y), (x + w, y + h), (0, 255, 0), 2)
 
-                # 图像预处理
-                processed_roi = preprocess_image(selected_roi)
+        # 显示 FPS
+        cv2.putText(frame, f"FPS: {fps_counter.fps:.2f}", (10, 30),
+                    cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
 
-                # OCR触发逻辑
-                if keyboard.is_pressed('o') and not ocr_active:
-                    ocr_active = True
-                    print("\n" + "="*40)
-                    print("开始OCR识别...")
+        # 如果有 OCR 结果，在图像上绘制
+        if ocr_result is not None and region is not None:
+            x, y, w, h = region
+            boxes, texts, scores = ocr_result
+            # 将 OCR 结果绘制到原始图像上（需要调整坐标）
+            adjusted_boxes = []
+            for box in boxes:
+                adjusted_box = []
+                for point in box:
+                    # 将 OCR 坐标从 ROI 坐标系转换为原始图像坐标系
+                    adjusted_point = (point[0] + x, point[1] + y)
+                    adjusted_box.append(adjusted_point)
+                adjusted_boxes.append(adjusted_box)
+            # 绘制 OCR 结果
+            ocr_frame = ocr_processor.draw_results(frame, adjusted_boxes, texts, scores)
+            cv2.imshow("Camera with Pen Detection and OCR", ocr_frame)
+        else:
+            cv2.imshow("Camera with Pen Detection and OCR", frame)
 
-                    # 执行OCR
-                    last_ocr_text = ocr_processor.process(processed_roi)
+        frame_count += 1
+        elapsed_time = time.time() - start_time
+        if elapsed_time > duration or cv2.waitKey(1) & 0xFF == ord('q'):
+            break
 
-                    print("识别结果:")
-                    print(last_ocr_text)
-                    print("="*40 + "\n")
-
-                    # 保存识别结果
-                    if last_ocr_text.strip():  # 确保存在有效文本
-                        with open("ocr_results.txt", "a", encoding="utf-8") as f:
-                            f.write(f"=== OCR结果 ===\n{last_ocr_text}\n\n")
-                        print("识别结果已保存到 ocr_results.txt")
-                    else:
-                        print("未获取到有效的OCR结果。")
-                    ocr_active = False  # 确保OCR激活状态正确关闭
-                elif not keyboard.is_pressed('o'):
-                    ocr_active = False
-
-            if cv2.waitKey(1) & 0xFF == ord('q'):
-                break
-
-    finally:
-        capturer.release()
-        cv2.destroyAllWindows()
+    cap.release()
+    cv2.destroyAllWindows()
 
 if __name__ == "__main__":
-    main()
+    test_camera_with_pen_detection_and_ocr(camera_index=0, duration=10000)

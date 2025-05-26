@@ -1,3 +1,4 @@
+#fps_controller.py
 import time
 
 class FPSCounter:
