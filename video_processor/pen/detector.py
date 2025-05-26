@@ -56,8 +56,13 @@ from ultralytics import YOLO
 import numpy as np
 
 class PenDetector:
+<<<<<<< HEAD
     def __init__(self, model_path=r'E:\aPenproject\Apen-project\video_processor\pen\bestva.pt', conf_thres=0.25):
         print(f"Loading PyTorch model from: {model_path}")
+=======
+    def __init__(self, model_path = r'D:\zhs\Apen-project\video_processor\pen\best.pt', conf_thres=0.25):
+        print(f"Loading model from: {model_path}")
+>>>>>>> 61d800b00884df2631d4334f5c3eda76d63d52eb
         self.model = YOLO(model_path)
         self.conf_thres = conf_thres
 
